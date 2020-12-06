@@ -1,0 +1,791 @@
+
+
+```{r}
+
+rm(list = ls())
+
+library(ggplot2)
+library(caret)
+library(glmnet)
+library(rpart)
+library(randomForest)
+library(dplyr)
+library(e1071)
+library(pROC)
+
+
+```
+
+```{r}
+
+'brings in data'
+df <- read.csv("C://Users/Sydney/Desktop/Dataset.csv" )
+
+'takes out hits, misses, score because redundant'
+df <- select(df, -contains("Hits"))
+df <- select(df, -contains("Misses"))
+df <- select(df, -contains("Score"))
+df <- select(df, -contains("Part_Num"))
+
+'Gets rid of NULL columns'
+df <- df[,!names(df) %in% c("Accuracy31","Accuracy32", "Clicks31","Clicks32", "Missrate31", "Missrate32")]
+
+' Number of pos, neg, and p'
+n_pos <- sum(df$Dyslexia ==1)
+n_neg <- sum(df$Dyslexia == 0)
+p <- ncol(df) -1
+
+
+```
+
+```{r}
+'Data description'
+
+'Count of 1 variable descriptions'
+ggplot() + geom_histogram(df, mapping = aes(x = Sex, fill = Sex), stat = 'count') +  ggtitle("Sex Dist")
+
+ggplot() + geom_histogram(df, mapping = aes(x = Age, fill = factor(..x..)), stat = 'count' ) +  ggtitle("Age Dist") + guides(fill = FALSE)
+
+ggplot() + geom_histogram(df, mapping = aes(x = Otherlang, fill = factor(..x..)), stat = 'count' ) +  ggtitle("Failed a Langauge at Least Once??") + guides(fill = FALSE)
+
+ggplot() + geom_histogram(df, mapping = aes(x = Nativelang, fill = factor(..x..)), stat = 'count' ) +  ggtitle("Spanish is Native Language?") + guides(fill = FALSE)
+
+ggplot() + geom_histogram(df, mapping = aes(x = Desktop_Tablet, fill = factor(..x..)), stat = 'count' ) +  ggtitle("Desktop or Tablet?") + guides(fill = FALSE)
+
+ggplot() + geom_histogram(df, mapping = aes(x = Nativelang, fill = Otherlang), stat = 'count', position = 'Dodge') + guides(fill = guide_legend(title = "Failed a Langauge at Least Once?")) + xlab("Spanish is Native Language?")
+
+
+
+'Predictor vs. Response'
+ggplot() + geom_histogram(df, mapping = aes(x = Sex, fill = factor(Dyslexia)), stat = 'count') +  ggtitle("Sex v. Dyslexia Dist") + guides(fill = guide_legend(title = "Dyslexia Indicator"))
+
+ggplot() + geom_histogram(df, mapping = aes(x = Age, fill = factor(Dyslexia)), stat = 'count') +  ggtitle("Age v. Dyslexia Dist") + guides(fill = guide_legend(title = "Dyslexia Indicator"))
+
+ggplot() + geom_histogram(df, mapping = aes(x = Nativelang, fill = factor(Dyslexia)), stat = 'count') +  ggtitle("Nativelang v. Dyslexia Dist") + guides(fill = guide_legend(title = "Dyslexia Indicator"))
+
+ggplot() + geom_histogram(df, mapping = aes(x = Otherlang, fill = factor(Dyslexia)), stat = 'count') +  ggtitle("Otherlang v. Dyslexia Dist") + guides(fill = guide_legend(title = "Dyslexia Indicator"))
+
+table(df$Nativelang, df$Otherlang, df$Dyslexia)
+
+```
+
+
+```{r}
+'Setting 2 level factors to 0,1 for matrix'
+
+df$Sex <- as.character(df$Sex)
+df$Sex[df$Sex == "M"] <- 0
+df$Sex[df$Sex == "F"] <- 1
+df$Sex <- as.numeric(df$Sex)
+
+df$Nativelang <- as.character(df$Nativelang)
+df$Nativelang[df$Nativelang == "N"] <- 0
+df$Nativelang[df$Nativelang == "Y"] <- 1
+df$Nativelang <- as.numeric(df$Nativelang)
+
+df$Otherlang<- as.character(df$Otherlang)
+df$Otherlang[df$Otherlang == "N"] <- 0
+df$Otherlang[df$Otherlang == "Y"] <- 1
+df$Otherlang <- as.numeric(df$Otherlang)
+
+df$Desktop_Tablet<- as.character(df$Desktop_Tablet)
+df$Desktop_Tablet[df$Desktop_Tablet == "T"] <- 0
+df$Desktop_Tablet[df$Desktop_Tablet == "D"] <- 1
+df$Desktop_Tablet <- as.numeric(df$Desktop_Tablet)
+
+'Setting to numeric values only'
+
+for (i in 1:ncol(df)) {
+  if (is.factor(df[,i])){
+    df[,i] <- as.numeric(df[,i])
+  }
+  
+}
+'X Matrix'
+matrix_df <- as.matrix(df)
+matrix_df <- matrix_df[,-ncol(df)]
+
+'y vector'
+y_df <- df$Dyslexia
+
+
+'50 different train/test sets'
+IDs <- createDataPartition(df$Dyslexia, times = 50, p = .9)
+
+
+```
+
+```{r}
+'-------Lasso Regression---------'
+
+AUC_Lasso_Train <- c(1:50)
+AUC_Lasso_Test <- c(1:50)
+
+
+for (j in 1:50){
+  
+  X_train <- as.matrix(df[IDs[[j]],])
+  X_test <- as.matrix(df[-IDs[[j]],])
+  X_train <- X_train[,-ncol(df)]
+  X_test <- X_test[,-ncol(df)]
+  
+  y_train <- df$Dyslexia[IDs[[j]]]
+  y_test <- df$Dyslexia[-IDs[[j]]]
+  
+  'sum of ns under train'
+  n_pos_train <- sum(y_train == 1)
+  n_neg_train <- sum(y_train == 0)
+  
+  ww <- y_train
+  ww[y_train == 0] <- n_pos_train/n_neg_train
+  
+  'best lasso lambda'
+  m <- cv.glmnet(x = X_train, 
+              y = y_train,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+  
+  'Model with best lasso lambda'
+  m.Lasso <- glmnet(x = X_train, 
+              y = y_train,
+              lambda = m$lambda.min,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+ 
+  
+  'Predict train data based on model'
+  train_probs <- predict(m.Lasso, X_train, type = "response")
+  
+  
+  'roc for train'
+  roc_Lasso <- roc(y_train, train_probs)
+  
+  'Stores AUC'
+  
+  AUC_Lasso_Train[j] <- roc_Lasso$auc
+  
+  'Predict test data based on model'
+  test_probs <- predict(m.Lasso, X_test, type = "response")
+  
+  'Roc for test'
+  roc_Lasso <- roc(y_test, test_probs)
+  
+  'Test AUC'
+
+  AUC_Lasso_Test[j] <- roc_Lasso$auc
+  
+} 
+
+```
+
+```{r}
+'-------Ridge Regression---------'
+
+AUC_Ridge_Train <- c(1:50)
+AUC_Ridge_Test <- c(1:50)
+  
+for (j in 1:50){
+
+  
+  X_train <- as.matrix(df[IDs[[j]],])
+  X_test <- as.matrix(df[-IDs[[j]],])
+  X_train <- X_train[,-ncol(df)]
+  X_test <- X_test[,-ncol(df)]
+  
+  y_train <- df$Dyslexia[IDs[[j]]]
+  y_test <- df$Dyslexia[-IDs[[j]]]
+  
+  'sum of ns under train'
+  n_pos_train <- sum(y_train == 1)
+  n_neg_train <- sum(y_train == 0)
+  
+  ww <- y_train
+  ww[y_train == 0] <- n_pos_train/n_neg_train
+  
+  'best Ridge lambda'
+  m <- cv.glmnet(x = X_train, 
+              y = y_train,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+  
+  'Model with best Ridge lambda'
+  m.Ridge <- glmnet(x = X_train, 
+              y = y_train,
+              lambda = m$lambda.min,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+  
+  
+  'Predict train data based on model'
+  train_probs <- predict(m.Ridge, X_train, type = "response")
+  
+  'roc train'
+  roc_Ridge <- roc(y_train, train_probs)
+
+  'AUC Train'
+  AUC_Ridge_Train[j] <- roc_Ridge$auc
+  
+  'Predict test data based on model'
+  test_probs <- predict(m.Ridge, X_test, type = "response")
+  
+  'Test ROC'
+  roc_Ridge <- roc(y_test, test_probs)
+  
+  'Test AUC'
+  AUC_Ridge_Test[j] <- roc_Ridge$auc
+} 
+
+
+```
+
+```{r}
+'-------Elas Regression---------'
+AUC_Elas_Train <- c(1:50)
+AUC_Elas_Test <- c(1:50)
+  
+for (j in 1:50){
+
+  X_train <- as.matrix(df[IDs[[j]],])
+  X_test <- as.matrix(df[-IDs[[j]],])
+  X_train <- X_train[,-ncol(df)]
+  X_test <- X_test[,-ncol(df)]
+  
+  y_train <- df$Dyslexia[IDs[[j]]]
+  y_test <- df$Dyslexia[-IDs[[j]]]
+
+  'sum of ns under train'
+  n_pos_train <- sum(y_train == 1)
+  n_neg_train <- sum(y_train == 0)
+      
+  ww <- y_train
+  ww[y_train == 0] <- n_pos_train/n_neg_train
+  
+  'best Elas lambda'
+  m <- cv.glmnet(x = X_train, 
+              y = y_train,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+  
+  'Model with best Elas lambda'
+  m.Elas <- glmnet(x = X_train, 
+              y = y_train,
+              lambda = m$lambda.min,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+  
+  
+  
+  'Predict train data based on model'
+  train_probs <- predict(m.Elas, X_train, type = "response")
+  
+  'AUC ROC Train'
+  roc_Elas <- roc(y_train, train_probs)
+  
+  AUC_Elas_Train[j] <- roc_Elas$auc
+  
+  'Predict test data based on model'
+  test_probs <- predict(m.Elas, X_test, type = "response")
+  
+  'AUC ROC Test'
+  roc_Elas <- roc(y_test, test_probs)
+
+  AUC_Elas_Test[j] <- roc_Elas$auc
+  
+} 
+
+```
+
+```{r}
+
+'-------rf Regression---------'
+Type_1_Error_Train_rf <- c(1:50)
+Type_2_Error_Train_rf <- c(1:50)
+MC_Error_Train_rf <- c(1:50)
+
+Type_1_Error_Test_rf <- c(1:50)
+Type_2_Error_Test_rf <- c(1:50)
+MC_Error_Test_rf <- c(1:50)
+
+AUC_rf_Train <- c(1:50)
+AUC_rf_Test <- c(1:50)
+
+
+for (j in 1:50){
+
+  
+  X_train <- df[IDs[[j]],]
+  X_test <- df[-IDs[[j]],]
+  
+  y_train <- as.factor(X_train$Dyslexia)
+  y_test <- as.factor(X_test$Dyslexia)
+
+  X_train$Dyslexia <- y_train
+  X_test$Dyslexia <- y_test
+
+  'runs the actualy random forest'
+  rf <- randomForest(Dyslexia ~ . ,  X_train) 
+  
+  roc_rf <- roc(y_train, rf$votes[,2])
+  
+  diff <- abs((1-roc_rf$sensitivities) - (1-roc_rf$specificities))
+  
+  'Best theta has lowest difference'
+  best_theta_rf <- roc_rf$thresholds[which.min(diff)]
+  
+  'sum of ns under train'
+  n_pos_train <- sum(y_train == 1)
+  n_neg_train <- sum(y_train == 0)
+
+  rf <- randomForest(Dyslexia ~ . ,  X_train, cutoff= c(best_theta_rf,  1-best_theta_rf))
+  
+  'ROC AUC Train'
+  roc_rf <- roc(y_train, rf$votes[,2])
+  
+  pred_train_pos_neg <- predict(rf, data = X_train[,-ncol(df)])
+
+
+  AUC_rf_Train[j] <- roc_rf$auc
+  
+  'ROC AUC Test'
+  pred_test_pos_neg <- data.frame(predict(rf, X_test[,-ncol(df)], index=2, type="prob", norm.votes=TRUE,    predict.all=FALSE, proximity=FALSE, nodes=FALSE))
+  
+  roc_rf <- roc(y_test, pred_test_pos_neg$X1)
+
+  pred_test_pos_neg <- predict(rf, X_test[,-ncol(df)])
+ 
+  AUC_rf_Test[j] <- roc_rf$auc
+}
+
+
+```
+
+
+```{r}
+Train_Rep <- rep("Train", 50)
+Test_Rep <- rep("Test",50)
+Train_Test_Rep <- data.frame(c(Train_Rep, Test_Rep))
+
+AUC_Error_Lasso <- c(AUC_Lasso_Train, AUC_Lasso_Test)
+AUC_Error_Lasso <- cbind(AUC_Error_Lasso,Train_Test_Rep)
+colnames(AUC_Error_Lasso) <- c("Error", "Data_Group")
+AUC_Error_Lasso$Error <- as.numeric(AUC_Error_Lasso$Error)
+AUC_Error_Lasso$Model <- "Lasso"
+
+ggplot() + geom_boxplot(data = AUC_Error_Lasso, mapping = aes(x = Data_Group, y = Error)) + ggtitle("Test/Train AUC Error for Lasso Model") + ylim(.7,1) + ylab("AUC")
+
+AUC_Error_Ridge <- c(AUC_Ridge_Train, AUC_Ridge_Test)
+AUC_Error_Ridge <- cbind(AUC_Error_Ridge,Train_Test_Rep)
+colnames(AUC_Error_Ridge) <- c("Error", "Data_Group")
+AUC_Error_Ridge$Error <- as.numeric(AUC_Error_Ridge$Error)
+AUC_Error_Ridge$Model <- "Ridge"
+
+ggplot() + geom_boxplot(data = AUC_Error_Ridge, mapping = aes(x = Data_Group, y = Error)) + ggtitle("Test/Train AUC Error for Ridge Model") + ylim(.7,1)+ ylab("AUC")
+
+AUC_Error_Elas <- c(AUC_Elas_Train, AUC_Elas_Test)
+AUC_Error_Elas <- cbind(AUC_Error_Elas,Train_Test_Rep)
+colnames(AUC_Error_Elas) <- c("Error", "Data_Group")
+AUC_Error_Elas$Error <- as.numeric(AUC_Error_Elas$Error)
+AUC_Error_Elas$Model <- "Elas"
+
+ggplot() + geom_boxplot(data = AUC_Error_Elas, mapping = aes(x = Data_Group, y = Error)) + ggtitle("Test/Train AUC Error for Elas Model") + ylim(.7,1)+ ylab("AUC")
+
+AUC_Error_rf <- c(AUC_rf_Train, AUC_rf_Test)
+AUC_Error_rf <- cbind(AUC_Error_rf,Train_Test_Rep)
+colnames(AUC_Error_rf) <- c("Error", "Data_Group")
+AUC_Error_rf$Error <- as.numeric(AUC_Error_rf$Error)
+AUC_Error_rf$Model <- "rf"
+
+ggplot() + geom_boxplot(data = AUC_Error_rf, mapping = aes(x = Data_Group, y = Error)) + ggtitle("Test/Train AUC Error for rf Model") + ylim(.7,1)+ ylab("AUC")
+
+
+AUC_Error_All <- rbind(AUC_Error_Elas,AUC_Error_Lasso, AUC_Error_rf, AUC_Error_Ridge )
+
+
+ggplot() + geom_boxplot(data = AUC_Error_All, mapping = aes(x = Data_Group, y = Error, fill = Model)) + ggtitle("Test/Train AUC Error for All Models") + ylim(.7,1)+ ylab("AUC")
+
+
+
+
+
+
+
+
+```
+```{r}
+
+'----Time Lasso---'
+j = 1
+
+X_train <- as.matrix(df[IDs[[j]],])
+X_test <- as.matrix(df[-IDs[[j]],])
+X_train <- X_train[,-ncol(df)]
+X_test <- X_test[,-ncol(df)]
+  
+y_train <- df$Dyslexia[IDs[[j]]]
+y_test <- df$Dyslexia[-IDs[[j]]]
+
+ww <- y_train
+ww[y_train == 0] <- n_pos_train/n_neg_train
+  
+ptm <- proc.time()
+
+  'best lasso lambda'
+  m <- cv.glmnet(x = X_train, 
+              y = y_train,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+  
+  'Model with best lasso lambda'
+  m.Lasso <- glmnet(x = X_train, 
+              y = y_train,
+              lambda = m$lambda.min,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+
+
+proc.time() - ptm
+  
+
+
+'---Time Ridge---'
+
+
+ptm <- proc.time()
+
+  'best ridge lambda'
+  m <- cv.glmnet(x = X_train, 
+              y = y_train,
+              alpha = 0,
+              family = "binomial",
+              weights = ww)
+  
+  'Model with best ridge lambda'
+  m.Ridge <- glmnet(x = X_train, 
+              y = y_train,
+              lambda = m$lambda.min,
+              alpha = 0,
+              family = "binomial",
+              weights = ww)
+
+proc.time() - ptm
+
+'----Time Elas---'
+
+ptm <- proc.time()
+
+  'best elas lambda'
+  m <- cv.glmnet(x = X_train, 
+              y = y_train,
+              alpha = .5,
+              family = "binomial",
+              weights = ww)
+  
+  'Model with bestelas lambda'
+  m.Elas <- glmnet(x = X_train, 
+              y = y_train,
+              lambda = m$lambda.min,
+              alpha = .5,
+              family = "binomial",
+              weights = ww)
+
+proc.time() - ptm
+
+'----Time RF---'
+
+X_train <- df[IDs[[j]],]
+X_test <- df[-IDs[[j]],]
+  
+y_train <- as.factor(X_train$Dyslexia)
+y_test <- as.factor(X_test$Dyslexia)
+
+X_train$Dyslexia <- y_train
+X_test$Dyslexia <- y_test
+
+
+ptm <- proc.time()
+
+rf <- randomForest(Dyslexia ~ . ,  X_train)
+
+
+proc.time() - ptm
+
+
+'90% CI'
+
+Z_val <- qnorm(.9)
+
+'---Lasso CI---'
+mean_Lasso <- mean(AUC_Lasso_Test)
+SD_Lasso <- sd(AUC_Lasso_Test)
+N_Lasso <- length(AUC_Lasso_Test)
+'Upper Lasso CI'
+mean_Lasso + Z_val*SD_Lasso/N_Lasso
+'Lower Lasso CI'
+mean_Lasso - Z_val*SD_Lasso/N_Lasso
+
+'---Ridge CI---'
+mean_Ridge <- mean(AUC_Ridge_Test)
+SD_Ridge <- sd(AUC_Ridge_Test)
+N_Ridge <- length(AUC_Ridge_Test)
+'Upper Ridge CI'
+mean_Ridge + Z_val*SD_Ridge/N_Ridge
+'Lower Ridge CI'
+mean_Ridge - Z_val*SD_Ridge/N_Ridge
+
+'---Elas CI---'
+mean_Elas <- mean(AUC_Elas_Test)
+SD_Elas <- sd(AUC_Elas_Test)
+N_Elas <- length(AUC_Elas_Test)
+'Upper Elas CI'
+mean_Elas + Z_val*SD_Elas/N_Elas
+'Lower Elas CI'
+mean_Elas - Z_val*SD_Elas/N_Elas
+
+'---rf CI---'
+mean_rf <- mean(AUC_rf_Test)
+SD_rf <- sd(AUC_rf_Test)
+N_rf <- length(AUC_rf_Test)
+'Upper rf CI'
+mean_rf + Z_val*SD_rf/N_rf
+'Lower rf CI'
+mean_rf - Z_val*SD_rf/N_rf
+
+
+```
+
+```{r}
+
+'All Data'
+
+X_all <- as.matrix(df)
+X_all <- X_all[,-ncol(df)]
+
+y_all <- df$Dyslexia
+
+n_pos_all <- sum(df$Dyslexia == 1)
+n_neg_all <- sum(df$Dyslexia == 0)
+
+ww <- y_all
+ww[y_all == 0] <- n_pos_all/n_neg_all
+
+'----Lasso----'
+
+ptm <- proc.time()
+
+  'best lasso lambda'
+  m <- cv.glmnet(x = X_all, 
+              y = y_all,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+  
+  'Model with best lasso lambda'
+  m.Lasso <- glmnet(x = X_all, 
+              y = y_all,
+              lambda = m$lambda.min,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+ 
+  
+  'Predict train data based on model'
+  all_probs <- predict(m.Lasso, X_all, type = "response")
+  
+  roc_Lasso <- roc(y_all, all_probs)
+  
+  AUC_Lasso_all <- roc_Lasso$auc
+
+proc.time() - ptm
+
+'----Ridge----'
+
+ptm <- proc.time()
+
+  'best Ridge lambda'
+  m <- cv.glmnet(x = X_all, 
+              y = y_all,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+  
+  'Model with best Ridge lambda'
+  m.Ridge <- glmnet(x = X_all, 
+              y = y_all,
+              lambda = m$lambda.min,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+ 
+  
+  'Predict train data based on model'
+  all_probs <- predict(m.Ridge, X_all, type = "response")
+  
+  roc_Ridge <- roc(y_all, all_probs)
+  
+  AUC_Ridge_all <- roc_Ridge$auc
+
+proc.time() - ptm
+
+
+'----Elas-----'
+
+ptm <- proc.time()
+
+  'best Elas lambda'
+  m <- cv.glmnet(x = X_all, 
+              y = y_all,
+              alpha = 1,
+              family = "binomial")
+  
+  'Model with best Elas lambda'
+  m.Elas <- glmnet(x = X_all, 
+              y = y_all,
+              lambda = m$lambda.min,
+              alpha = 1,
+              family = "binomial")
+ 
+  
+  'Predict train data based on model'
+  all_probs <- predict(m.Elas, X_all, type = "response")
+  
+  roc_Elas <- roc(y_all, all_probs)
+  
+  AUC_Elas_all <- roc_Elas$auc
+
+proc.time() - ptm
+
+
+
+'----RF-----'
+
+  X_all <- df
+  
+  y_all <- as.factor(df$Dyslexia)
+
+  X_all$Dyslexia <- y_all
+
+ptm <- proc.time()
+
+  'runs the actualy random forest'
+  rf <- randomForest(Dyslexia ~ . ,  X_all)
+  
+  roc_rf <- roc(y_all, rf$votes[,2])
+  
+  AUC_rf_all <- roc_rf$auc
+  
+proc.time() - ptm
+
+```
+
+```{r}
+
+'Lasso'
+Coeff <- as.numeric(m.Lasso$beta)
+
+x_vals <- c(1:95)
+
+Lasso_Coeff_Values <- data.frame(cbind(Coeff, x_vals))
+
+Lasso_Coeff_Values$Coeff <- as.numeric(Coeff)
+
+Lasso_Coeff_Values <- Lasso_Coeff_Values[order(Lasso_Coeff_Values$Coeff, decreasing = TRUE),]
+
+Lasso_Coeff_Values$x_vals <- as.factor(Lasso_Coeff_Values$x_vals)
+
+Lasso_Coeff_Values$Model <- "Lasso"
+
+Lasso_Coeff_Values$x_vals <- factor(Lasso_Coeff_Values$x_vals, levels = Lasso_Coeff_Values$x_vals)
+
+
+ggplot() + geom_histogram( mapping = aes(x = Lasso_Coeff_Values$x_vals, y = Lasso_Coeff_Values$Coeff), stat = 'Identity') + scale_x_discrete(guide = guide_axis(n.dodge=3)) + xlab("Feature Number") +ylab("Coeff Value") + ggtitle("Lasso Model Coeff Values")
+
+  m <- cv.glmnet(x = X_all, 
+              y = y_all,
+              alpha = 1,
+              family = "binomial",
+              weights = ww)
+  
+plot(m) + title("Lasso CV")
+
+df.dummy <- data.frame(varImp(m.Lasso, lambda = m$lambda.min))
+
+'Ridge'
+Coeff <- as.numeric(m.Ridge$beta)
+
+Ridge_Coeff_Values <- data.frame(cbind(Coeff, x_vals))
+
+Ridge_Coeff_Values <- Ridge_Coeff_Values[order(Ridge_Coeff_Values$Coeff,decreasing = TRUE),]
+
+Ridge_Coeff_Values$x_vals <- as.factor(Ridge_Coeff_Values$x_vals)
+
+Ridge_Coeff_Values$Model <- "Ridge"
+
+Ridge_Coeff_Values$x_vals <- factor(Ridge_Coeff_Values$x_vals, levels = Ridge_Coeff_Values$x_vals)
+
+ggplot() + geom_histogram( mapping = aes(x = Ridge_Coeff_Values$x_vals, y = Ridge_Coeff_Values$Coeff), stat = 'Identity') + scale_x_discrete(guide = guide_axis(n.dodge=3)) + xlab("Feature Number") +ylab("Coeff Value") + ggtitle("Ridge Model Coeff Values")
+
+  m <- cv.glmnet(x = X_all, 
+              y = y_all,
+              alpha = 0,
+              family = "binomial",
+              weights = ww)
+  
+plot(m) + title("Ridge CV")
+  
+df.dummy <- data.frame(varImp(m.Ridge, lambda = m$lambda.min))
+
+'Elas'
+Coeff <- as.numeric(m.Elas$beta)
+
+ggplot() + geom_bar(mapping = aes(x = x_vals, y = as.numeric(Elas_Coeff)),stat = 'Identity') + ggtitle("Coefficent Plot for Elas")
+
+  m <- cv.glmnet(x = X_all, 
+              y = y_all,
+              alpha = .5,
+              family = "binomial",
+              weights = ww)
+
+  plot(m) + title("Elas CV")
+  
+df.dummy <- data.frame(varImp(m.Elas, lambda = m$lambda.min))
+ 
+Coeff <- as.numeric(m.Elas$beta)
+
+Elas_Coeff_Values <- data.frame(cbind(Coeff, x_vals))
+
+Elas_Coeff_Values <- Elas_Coeff_Values[order(Elas_Coeff_Values$Coeff,decreasing = TRUE),]
+
+Elas_Coeff_Values$x_vals <- as.factor(Elas_Coeff_Values$x_vals)
+
+Elas_Coeff_Values$Model <- "Elas"
+
+Elas_Coeff_Values$x_vals <- factor(Elas_Coeff_Values$x_vals, levels = Elas_Coeff_Values$x_vals)
+
+ggplot() + geom_histogram( mapping = aes(x = Elas_Coeff_Values$x_vals, y = Elas_Coeff_Values$Coeff), stat = 'Identity') + scale_x_discrete(guide = guide_axis(n.dodge=3)) + xlab("Feature Number") +ylab("Coeff Value") + ggtitle("Elas Model Coeff Values")
+
+'RF'
+
+
+rf_imp <- as.numeric(rf$importance)
+
+ggplot() + geom_bar(mapping = aes(x = x_vals, y = as.numeric(rf_imp)),stat = 'Identity') + ggtitle("Var Importance Plot for rf")
+
+df.dummy <- varImp(rf)
+
+
+All_Coeff_Values <- rbind(Lasso_Coeff_Values, Lasso_Coeff_Values, Elas_Coeff_Values)
+
+
+
+dummy_table <- cbind(rownames(m.Lasso$beta), c(1:95))
+colnames(dummy_table) <- c("Feature", "Number")
+
+```
